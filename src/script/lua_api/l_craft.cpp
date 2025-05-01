@@ -265,13 +265,13 @@ int ModApiCraft::l_register_craft(lua_State *L)
 }
 
 // clear_craft({[output=item], [recipe={{item00,item10},{item01,item11}}])
-int ModApiCraft::l_clear_craft(lua_State* L)
+int ModApiCraft::l_clear_craft(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 	luaL_checktype(L, 1, LUA_TTABLE);
 	int table = 1;
 
-	IWritableCraftDefManager* craftdef =
+	IWritableCraftDefManager *craftdef =
 			getServer(L)->getWritableCraftDefManager();
 
 	std::string output = getstringfield_default(L, table, "output", "");
@@ -284,7 +284,8 @@ int ModApiCraft::l_clear_craft(lua_State* L)
 			return 1;
 		}
 
-		warningstream << "No craft recipe known for output '" << output << "'\n";
+		warningstream << "No craft recipe known for output '" << output
+				<< "'" << std::endl;
 		lua_pushboolean(L, false);
 		return 1;
 	}
@@ -295,33 +296,27 @@ int ModApiCraft::l_clear_craft(lua_State* L)
 
 	if (type == "shaped") {
 		lua_getfield(L, table, "recipe");
-		if (lua_isnil(L, -1)) {
+		if (lua_isnil(L, -1))
 			throw LuaError("Either output or recipe has to be defined");
-		}
-		if (!readCraftRecipeShaped(L, -1, width, recipe)) {
+		if (!readCraftRecipeShaped(L, -1, width, recipe))
 			throw LuaError("Invalid crafting recipe");
-		}
 	} else if (type == "shapeless") {
 		lua_getfield(L, table, "recipe");
-		if (lua_isnil(L, -1)) {
+		if (lua_isnil(L, -1))
 			throw LuaError("Either output or recipe has to be defined");
-		}
-		if (!readCraftRecipeShapeless(L, -1, recipe)) {
+		if (!readCraftRecipeShapeless(L, -1, recipe))
 			throw LuaError("Invalid crafting recipe");
-		}
 	} else if (type == "cooking") {
 		method = CRAFT_METHOD_COOKING;
 		std::string rec = getstringfield_default(L, table, "recipe", "");
-		if (rec.empty()) {
-			throw LuaError("Crafting definition (cooking) is missing recipe");
-		}
+		if (rec.empty())
+			throw LuaError("Crafting definition (cooking) is missing a recipe");
 		recipe.push_back(rec);
 	} else if (type == "fuel") {
 		method = CRAFT_METHOD_FUEL;
 		std::string rec = getstringfield_default(L, table, "recipe", "");
-		if (rec.empty()) {
-			throw LuaError("Crafting definition (fuel) is missing recipe");
-		}
+		if (rec.empty())
+			throw LuaError("Crafting definition (fuel) is missing a recipe");
 		recipe.push_back(rec);
 	} else {
 		throw LuaError("Unknown crafting definition type: \"" + type + "\"");
@@ -329,7 +324,7 @@ int ModApiCraft::l_clear_craft(lua_State* L)
 
 	std::vector<ItemStack> items;
 	items.reserve(recipe.size());
-	for (const auto& item : recipe) {
+	for (const auto &item : recipe) {
 		items.emplace_back(item, 1, 0, getServer(L)->idef());
 	}
 	CraftInput input(method, width, items);
@@ -339,11 +334,10 @@ int ModApiCraft::l_clear_craft(lua_State* L)
 				<< ", items: [";
 		for (size_t i = 0; i < items.size(); ++i) {
 			warningstream << "'" << items[i].name << "'";
-			if (i != items.size() - 1) {
+			if (i != items.size() - 1)
 				warningstream << ", ";
-			}
 		}
-		warningstream << "])\n";
+		warningstream << "])" << std::endl;
 		lua_pushboolean(L, false);
 		return 1;
 	}
