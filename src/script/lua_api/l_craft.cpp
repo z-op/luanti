@@ -273,7 +273,7 @@ int ModApiCraft::l_clear_craft(lua_State *L)
 
     // Get craft definitions manager
     IWritableCraftDefManager *craftdef =
-            getServer(L)->getWritableCraftDefManager();
+        getServer(L)->getWritableCraftDefManager();
 
     std::string output = getstringfield_default(L, table, "output", "");
     std::string type = getstringfield_default(L, table, "type", "shaped");
