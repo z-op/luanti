@@ -1,0 +1,9 @@
+set(database_SRCS
+	${CMAKE_CURRENT_SOURCE_DIR}/postgresql_lru/postgresql_lru.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/postgresql_lru/auth_postgresql_lru.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/postgresql_lru/map_postgresql_lru.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/postgresql_lru/connection_pool_postgresql_lru.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/postgresql_lru/player_postgresql_lru.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/postgresql_lru/modstorage_postgresql_lru.cpp
+	PARENT_SCOPE
+)
