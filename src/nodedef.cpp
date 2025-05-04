@@ -761,10 +761,6 @@ static bool isWorldAligned(AlignStyle style, WorldAlignMode mode, NodeDrawType d
 void ContentFeatures::updateTextures(ITextureSource *tsrc, IShaderSource *shdsrc,
 	scene::IMeshManipulator *meshmanip, Client *client, const TextureSettings &tsettings)
 {
-	// minimap pixel color - the average color of a texture
-	if (tsettings.enable_minimap && !tiledef[0].name.empty())
-		minimap_color = tsrc->getTextureAverageColor(tiledef[0].name);
-
 	// Figure out the actual tiles to use
 	TileDef tdef[6];
 	for (u32 j = 0; j < 6; j++) {
@@ -909,7 +905,12 @@ void ContentFeatures::updateTextures(ITextureSource *tsrc, IShaderSource *shdsrc
 
 	u32 overlay_shader = shdsrc->getShader("nodes_shader", overlay_material, drawtype);
 
+	// minimap pixel color = average color of top tile
+	if (tsettings.enable_minimap && !tdef[0].name.empty() && drawtype != NDT_AIRLIKE)
+		minimap_color = tsrc->getTextureAverageColor(tdef[0].name);
+
 	// Tiles (fill in f->tiles[])
+	bool any_polygon_offset = false;
 	for (u16 j = 0; j < 6; j++) {
 		tiles[j].world_aligned = isWorldAligned(tdef[j].align_style,
 				tsettings.world_aligned_mode, drawtype);
@@ -922,6 +923,17 @@ void ContentFeatures::updateTextures(ITextureSource *tsrc, IShaderSource *shdsrc
 					tdef[j].backface_culling, tsettings);
 
 		tiles[j].layers[0].need_polygon_offset = !tiles[j].layers[1].empty();
+		any_polygon_offset |= tiles[j].layers[0].need_polygon_offset;
+	}
+
+	if (drawtype == NDT_MESH && any_polygon_offset) {
+		// Our per-tile polygon offset enablement workaround works fine for normal
+		// nodes and anything else, where we know that different tiles are different
+		// faces that couldn't possibly conflict with each other.
+		// We can't assume this for mesh nodes, so apply it to all tiles (= materials)
+		// then.
+		for (u16 j = 0; j < 6; j++)
+			tiles[j].layers[0].need_polygon_offset = true;
 	}
 
 	MaterialType special_material = material_type;
@@ -1445,13 +1457,16 @@ void NodeDefManager::updateTextures(IGameDef *gamedef, void *progress_callback_a
 	TextureSettings tsettings;
 	tsettings.readSettings();
 
-	u32 size = m_content_features.size();
+	tsrc->setImageCaching(true);
 
+	u32 size = m_content_features.size();
 	for (u32 i = 0; i < size; i++) {
 		ContentFeatures *f = &(m_content_features[i]);
 		f->updateTextures(tsrc, shdsrc, meshmanip, client, tsettings);
 		client->showUpdateProgressTexture(progress_callback_args, i, size);
 	}
+
+	tsrc->setImageCaching(false);
 #endif
 }
 
