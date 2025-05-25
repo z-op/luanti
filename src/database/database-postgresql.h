@@ -3,123 +3,218 @@
 // Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
-
+#ifndef FMT_HEADER_ONLY
+#define FMT_HEADER_ONLY
+#endif
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <atomic>
+#include <thread>
+#include <tuple>
+#include <fmt/format.h>
+#include <fmt/core.h>
 #include <string>
 #include <libpq-fe.h>
 #include "database.h"
 #include "util/basic_macros.h"
+#include <memory>
+#include <unordered_map>
+#include <list>
+#include <functional>
+#include <unordered_set>
 
-// Template class for PostgreSQL based data storage
+struct KeyHash {
+    size_t operator()(const std::pair<std::string, std::string>& k) const {
+        return std::hash<std::string>()(k.first) ^
+              (std::hash<std::string>()(k.second) << 1);
+    }
+};
+
+/**
+ * LRU кэш для хранения данных mod_storage
+ * Особенности:
+ * - Потокобезопасный доступ
+ * - Автоматическая инвалидация по модам
+ * - Негативное кэширование
+ */
+
+// database-postgresql.h
+class CacheManager {
+public:
+    using KeyType = std::pair<std::string, std::string>;
+
+    explicit CacheManager(size_t size);
+    bool get(const std::string &modname, const std::string &key, std::string &value);
+    void put(const std::string &modname, const std::string &key, const std::string &value);
+    void remove(const std::string &modname, const std::string &key);
+    void purgeMod(const std::string &modname);
+
+private:
+    struct CacheEntry {
+        std::string value;
+        std::list<KeyType>::iterator lru_it;
+    };
+
+    std::unordered_map<KeyType, CacheEntry, KeyHash> cache;
+    std::list<KeyType> lru_queue;
+    std::mutex cache_mutex;
+    size_t max_size;
+};
+
+
 class Database_PostgreSQL : public Database
 {
 public:
-	Database_PostgreSQL(const std::string &connect_string, const char *type);
-	~Database_PostgreSQL();
+	virtual ~Database_PostgreSQL();
+	static inline int16_t pg_to_smallint(PGresult *res, int row, int col)
+    {
+        return static_cast<int16_t>(atoi(PQgetvalue(res, row, col)));
+    }
 
-	void beginSave() override;
-	void endSave() override;
-	void rollback();
+    inline v3s16 pg_to_v3s16(PGresult *res, int row, int col) {
+    int16_t x = pg_to_smallint(res, row, col);
+    int16_t y = pg_to_smallint(res, row, col + 1);
+    int16_t z = pg_to_smallint(res, row, col + 2);
 
-	bool initialized() const override;
+	#ifdef WORDS_LITTLEENDIAN
+	x = ntohs(x);
+    y = ntohs(y);
+    z = ntohs(z);
+	#endif
 
-	void verifyDatabase() override;
-
-protected:
-	// Conversion helpers
-	inline int pg_to_int(PGresult *res, int row, int col)
-	{
-		return atoi(PQgetvalue(res, row, col));
+    return v3s16(x, y, z);
 	}
 
-	inline u32 pg_to_uint(PGresult *res, int row, int col)
-	{
-		return (u32) atoi(PQgetvalue(res, row, col));
-	}
-
-	inline float pg_to_float(PGresult *res, int row, int col)
-	{
-		return (float) atof(PQgetvalue(res, row, col));
-	}
-
-	inline v3s16 pg_to_v3s16(PGresult *res, int row, int col)
-	{
-		return v3s16(
-			pg_to_int(res, row, col),
-			pg_to_int(res, row, col + 1),
-			pg_to_int(res, row, col + 2)
-		);
-	}
-
-	inline std::string pg_to_string(PGresult *res, int row, int col)
-	{
-		return std::string(PQgetvalue(res, row, col), PQgetlength(res, row, col));
-	}
-
-	inline PGresult *execPrepared(const char *stmtName, const int paramsNumber,
-		const void **params,
-		const int *paramsLengths = NULL, const int *paramsFormats = NULL,
-		bool clear = true, bool nobinary = true)
-	{
-		return checkResults(PQexecPrepared(m_conn, stmtName, paramsNumber,
-			(const char* const*) params, paramsLengths, paramsFormats,
-			nobinary ? 1 : 0), clear);
-	}
-
-	inline PGresult *execPrepared(const char *stmtName, const int paramsNumber,
-		const char **params, bool clear = true, bool nobinary = true)
-	{
-		return execPrepared(stmtName, paramsNumber,
-			(const void **)params, NULL, NULL, clear, nobinary);
-	}
-
-	void createTableIfNotExists(const std::string &table_name, const std::string &definition);
-
-	// Database initialization
-	void connectToDatabase();
-	virtual void createDatabase() = 0;
-	virtual void initStatements() = 0;
-	inline void prepareStatement(const std::string &name, const std::string &sql)
-	{
-		checkResults(PQprepare(m_conn, name.c_str(), sql.c_str(), 0, NULL));
-	}
+    Database_PostgreSQL(const std::string &connect_string, const char *type);
 
 	int getPGVersion() const { return m_pgversion; }
+    void beginSave() override;
+    void endSave() override;
+    void rollback();
+
+    bool initialized() const override;
+    void verifyDatabase();
+    void reconnectDatabase();
+
+
+protected:
+    // Connection management
+    void connectToDatabase();
+
+    // Helpers
+    void createTableIfNotExists(const std::string &table_name, const std::string &definition);
+    void prepareStatement(const char *name, const char *sql);
+
+    // Execution methods
+
+    PGresult *execPrepared(
+        const char *stmtName,
+        int paramsNumber,
+        const char* const* params,
+        const int *paramsLengths = nullptr,
+        const int *paramsFormats = nullptr,
+		int resultFormat = 0,
+        bool clear = true
+
+    );
+
+    // Conversion helpers
+    int pg_to_int(PGresult *res, int row, int col) {
+        return atoi(PQgetvalue(res, row, col));
+    }
+
+    u32 pg_to_uint(PGresult *res, int row, int col) {
+        return (u32)atoi(PQgetvalue(res, row, col));
+    }
+
+    float pg_to_float(PGresult *res, int row, int col) {
+        return (float)atof(PQgetvalue(res, row, col));
+    }
+
+    std::string pg_to_string(PGresult *res, int row, int col) {
+        return std::string(PQgetvalue(res, row, col), PQgetlength(res, row, col));
+    }
+
+    void executeSQL(const std::string &sql) {
+        checkResults(PQexec(m_conn, sql.c_str()));
+    }
+
+    // Database info
+    PGconn *m_conn = nullptr;
+    int m_pgversion = 0;
 
 private:
-	// Database connectivity checks
-	void ping();
+    void ping();
+    std::string m_connect_string;
+	// Disable copy constructor and assignment operator
+	Database_PostgreSQL(const Database_PostgreSQL&) = delete;
+	Database_PostgreSQL& operator=(const Database_PostgreSQL&) = delete;
 
-	// Database usage
+protected:
+    virtual void createDatabase() = 0;
+    virtual void initStatements() = 0;
 	PGresult *checkResults(PGresult *res, bool clear = true);
 
-	// Attributes
-	std::string m_connect_string;
-	PGconn *m_conn = nullptr;
-	int m_pgversion = 0;
 };
 
-// Not sure why why we have to do this. can't C++ figure it out on its own?
 #define PARENT_CLASS_FUNCS \
-	void beginSave() { Database_PostgreSQL::beginSave(); } \
-	void endSave() { Database_PostgreSQL::endSave(); } \
-	void verifyDatabase() { Database_PostgreSQL::verifyDatabase(); }
+    void beginSave() override { Database_PostgreSQL::beginSave(); } \
+    void endSave() override { Database_PostgreSQL::endSave(); } \
+    void verifyDatabase() { Database_PostgreSQL::verifyDatabase(); }
 
 class MapDatabasePostgreSQL : private Database_PostgreSQL, public MapDatabase
 {
 public:
-	MapDatabasePostgreSQL(const std::string &connect_string);
-	virtual ~MapDatabasePostgreSQL() = default;
+    MapDatabasePostgreSQL(const std::string &connect_string);
+    ~MapDatabasePostgreSQL() override = default;
 
-	bool saveBlock(const v3s16 &pos, std::string_view data);
-	void loadBlock(const v3s16 &pos, std::string *block);
-	bool deleteBlock(const v3s16 &pos);
-	void listAllLoadableBlocks(std::vector<v3s16> &dst);
+    bool saveBlock(const v3s16 &pos, std::string_view data) override;
+    void loadBlock(const v3s16 &pos, std::string *block) override;
+    bool deleteBlock(const v3s16 &pos) override;
+    void listAllLoadableBlocks(std::vector<v3s16> &dst) override;
 
-	PARENT_CLASS_FUNCS
+    PARENT_CLASS_FUNCS
 
 protected:
-	virtual void createDatabase();
-	virtual void initStatements();
+    void createDatabase() override;
+    void initStatements() override;
+private:
+	std::string posToString(const v3s16 &pos) const;  // Declaration only
+    CacheManager m_cache;
+};
+
+class ModStorageDatabasePostgreSQL : private Database_PostgreSQL, public ModStorageDatabase
+{
+public:
+    ModStorageDatabasePostgreSQL(const std::string &connect_string);
+    ~ModStorageDatabasePostgreSQL() override;
+
+	void getModEntries(const std::string &modname, StringMap *storage) override;
+    void getModKeys(const std::string &modname, std::vector<std::string> *storage) override;
+    bool getModEntry(const std::string &modname, const std::string &key, std::string *value) override;
+    bool hasModEntry(const std::string &modname, const std::string &key) override;
+    bool setModEntry(const std::string &modname, const std::string &key, std::string_view value) override;
+    bool removeModEntry(const std::string &modname, const std::string &key) override;
+    bool removeModEntries(const std::string &modname) override;
+    void listMods(std::vector<std::string> *res) override;
+
+    PARENT_CLASS_FUNCS
+
+protected:
+    void createDatabase() override;
+    void initStatements() override;
+
+private:
+    CacheManager m_cache;
+    std::mutex m_write_mutex;
+    std::condition_variable m_write_cv;
+    std::queue<std::tuple<std::string, std::string, std::string>> m_write_queue;
+    std::atomic<bool> m_running{true};
+    std::thread m_writer_thread;
+
+    void writerThread();
+    void flushWriteQueue();
 };
 
 class PlayerDatabasePostgreSQL : private Database_PostgreSQL, public PlayerDatabase
@@ -136,8 +231,8 @@ public:
 	PARENT_CLASS_FUNCS
 
 protected:
-	virtual void createDatabase();
-	virtual void initStatements();
+	void createDatabase() override;
+	void initStatements() override;
 
 private:
 	bool playerDataExists(const std::string &playername);
@@ -159,34 +254,12 @@ public:
 	PARENT_CLASS_FUNCS
 
 protected:
-	virtual void createDatabase();
-	virtual void initStatements();
+	void createDatabase() override;
+	void initStatements() override;
 
 private:
 	virtual void writePrivileges(const AuthEntry &authEntry);
 };
 
-class ModStorageDatabasePostgreSQL : private Database_PostgreSQL, public ModStorageDatabase
-{
-public:
-	ModStorageDatabasePostgreSQL(const std::string &connect_string);
-	~ModStorageDatabasePostgreSQL() = default;
-
-	void getModEntries(const std::string &modname, StringMap *storage);
-	void getModKeys(const std::string &modname, std::vector<std::string> *storage);
-	bool getModEntry(const std::string &modname, const std::string &key, std::string *value);
-	bool hasModEntry(const std::string &modname, const std::string &key);
-	bool setModEntry(const std::string &modname,
-			const std::string &key, std::string_view value);
-	bool removeModEntry(const std::string &modname, const std::string &key);
-	bool removeModEntries(const std::string &modname);
-	void listMods(std::vector<std::string> *res);
-
-	PARENT_CLASS_FUNCS
-
-protected:
-	virtual void createDatabase();
-	virtual void initStatements();
-};
-
 #undef PARENT_CLASS_FUNCS
+
